@@ -1,0 +1,894 @@
+From bd53a32e8b32ec3ec044684dda463906f263bda7 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Mon, 14 Sep 2026 16:17:30 +0000
+Subject: [PATCH 1/2] Build modified APK through GitHub Actions
+
+---
+ .../workflows/build-play-together-mnhut.yml   |  51 ++++++++++++
+ .gitignore                                    |   4 +-
+ BUILD_BLOCKER.md                              |  23 ------
+ scripts/apk/KeyGateActivity.java.in           |  69 +++++++++++++++++
+ .../apk/__pycache__/inventory.cpython-314.pyc | Bin 0 -> 1747 bytes
+ .../__pycache__/static_audit.cpython-314.pyc  | Bin 0 -> 3370 bytes
+ .../transform_manifest.cpython-314.pyc        | Bin 0 -> 6057 bytes
+ scripts/apk/build.sh                          |  36 +++++++++
+ scripts/apk/download.sh                       |  28 +++++++
+ scripts/apk/install-tools.sh                  |  19 +++++
+ scripts/apk/inventory.py                      |  12 +++
+ scripts/apk/publish-release.sh                |  22 ++++++
+ scripts/apk/split-and-report.sh               |  63 +++++++++++++++
+ scripts/apk/static_audit.py                   |  25 ++++++
+ scripts/apk/transform_manifest.py             |  73 ++++++++++++++++++
+ scripts/apk/verify.sh                         |  16 ++++
+ 16 files changed, 417 insertions(+), 24 deletions(-)
+ create mode 100644 .github/workflows/build-play-together-mnhut.yml
+ delete mode 100644 BUILD_BLOCKER.md
+ create mode 100644 scripts/apk/KeyGateActivity.java.in
+ create mode 100644 scripts/apk/__pycache__/inventory.cpython-314.pyc
+ create mode 100644 scripts/apk/__pycache__/static_audit.cpython-314.pyc
+ create mode 100644 scripts/apk/__pycache__/transform_manifest.cpython-314.pyc
+ create mode 100644 scripts/apk/build.sh
+ create mode 100644 scripts/apk/download.sh
+ create mode 100644 scripts/apk/install-tools.sh
+ create mode 100644 scripts/apk/inventory.py
+ create mode 100644 scripts/apk/publish-release.sh
+ create mode 100644 scripts/apk/split-and-report.sh
+ create mode 100644 scripts/apk/static_audit.py
+ create mode 100644 scripts/apk/transform_manifest.py
+ create mode 100644 scripts/apk/verify.sh
+
+diff --git a/.github/workflows/build-play-together-mnhut.yml b/.github/workflows/build-play-together-mnhut.yml
+new file mode 100644
+index 0000000..5d03d5c
+--- /dev/null
++++ b/.github/workflows/build-play-together-mnhut.yml
+@@ -0,0 +1,51 @@
++name: Build Play Together MNHUT APK
++
++on:
++  workflow_dispatch:
++  push:
++    paths:
++      - ".github/workflows/build-play-together-mnhut.yml"
++      - "scripts/apk/**"
++
++permissions:
++  contents: write
++
++concurrency:
++  group: play-together-mnhut-2.31.0
++  cancel-in-progress: false
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    timeout-minutes: 360
++    env:
++      APK_FILE_ID: 1TUiPxl_jdMs-jQIwXC3uHnngFk937tkA
++      RELEASE_TAG: play-together-mnhut-2.31.0
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-java@v4
++        with:
++          distribution: temurin
++          java-version: "17"
++      - name: Reclaim runner disk space
++        run: |
++          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc || true
++          df -h .
++      - name: Install tools
++        run: scripts/apk/install-tools.sh
++      - name: Download and build
++        run: scripts/apk/build.sh
++      - name: Publish verified release assets with retry
++        env:
++          GH_TOKEN: ${{ github.token }}
++        run: scripts/apk/publish-release.sh
++      - name: Upload reports on failure
++        if: failure()
++        uses: actions/upload-artifact@v4
++        with:
++          name: apk-build-diagnostics
++          path: |
++            work/logs/**
++            dist/*.txt
++          if-no-files-found: ignore
++
+diff --git a/.gitignore b/.gitignore
+index b941a13..692df33 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,4 +3,6 @@
+ *.apk.[0-9][0-9][0-9]
+ *.jks
+ *.keystore
+-
++work/
++dist/
++tools/
+diff --git a/BUILD_BLOCKER.md b/BUILD_BLOCKER.md
+deleted file mode 100644
+index d62c25c..0000000
+--- a/BUILD_BLOCKER.md
++++ /dev/null
+@@ -1,23 +0,0 @@
+-# Play Together MNHUT build blocker
+-
+-## Status
+-
+-The requested APK transformation was not performed because the source APK could
+-not be downloaded from Google Drive in this execution environment.
+-
+-## Reproducible failure
+-
+-On 2026-09-14, HTTPS requests to both `drive.google.com` and
+-`drive.usercontent.google.com` were rejected by the mandatory environment proxy
+-with HTTP `403 Forbidden` (`CONNECT tunnel failed`). Bypassing the proxy is not
+-possible because direct DNS resolution is disabled. Package installation from
+-PyPI was blocked by the same proxy, so `gdown` could not be installed either.
+-
+-The repository also has no configured Git remote, and GitHub CLI is not
+-authenticated. Consequently, neither a GitHub Release nor an authenticated
+-Google Drive upload can be created from this environment.
+-
+-## Safety outcome
+-
+-No APK was created, modified, signed, split, or uploaded. No success claim,
+-checksum, or download URL should be inferred from this report.
+diff --git a/scripts/apk/KeyGateActivity.java.in b/scripts/apk/KeyGateActivity.java.in
+new file mode 100644
+index 0000000..b9e8060
+--- /dev/null
++++ b/scripts/apk/KeyGateActivity.java.in
+@@ -0,0 +1,69 @@
++package com.mnhutx.playtogether.gate;
++
++import android.app.Activity;
++import android.content.Intent;
++import android.net.Uri;
++import android.os.Bundle;
++import android.text.InputType;
++import android.view.Gravity;
++import android.view.View;
++import android.widget.Button;
++import android.widget.EditText;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++public final class KeyGateActivity extends Activity {
++    private EditText key;
++    private TextView error;
++    @Override public void onCreate(Bundle state) {
++        super.onCreate(state);
++        LinearLayout box = new LinearLayout(this);
++        box.setOrientation(LinearLayout.VERTICAL); box.setGravity(Gravity.CENTER_HORIZONTAL);
++        int pad = (int)(24 * getResources().getDisplayMetrics().density);
++        box.setPadding(pad, pad, pad, pad);
++        TextView title = new TextView(this);
++        title.setText("Play Together MNHUT"); title.setTextSize(24); box.addView(title);
++        key = new EditText(this); key.setHint("Nhập key");
++        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
++        key.setSingleLine(true); box.addView(key, new LinearLayout.LayoutParams(-1, -2));
++        Button submit = new Button(this); submit.setText("Xác nhận"); box.addView(submit);
++        error = new TextView(this); error.setTextSize(16); box.addView(error);
++        submit.setOnClickListener(new View.OnClickListener() {
++            @Override public void onClick(View ignored) { verifyAndOpen(); }
++        });
++        setContentView(box);
++    }
++    private void verifyAndOpen() {
++        String entered = key.getText().toString();
++        if (!"mnhut".equals(entered)) {
++            error.setText(entered.length() == 0 ? "Key không được để trống" : "Key không chính xác");
++            return;
++        }
++        Intent incoming = getIntent(); Intent game = new Intent();
++        game.setClassName(this, "__GAME_ACTIVITY__");
++        String action = incoming.getAction();
++        if (action != null && !Intent.ACTION_MAIN.equals(action)) game.setAction(action);
++        Uri data = incoming.getData(); if (data != null) game.setData(data);
++        if (incoming.getCategories() != null)
++            for (String category : incoming.getCategories()) game.addCategory(category);
++        Bundle source = incoming.getExtras();
++        if (source != null) {
++            Bundle safe = new Bundle();
++            for (String name : source.keySet()) {
++                Object value = source.get(name);
++                if (value instanceof String) safe.putString(name, (String)value);
++                else if (value instanceof Boolean) safe.putBoolean(name, (Boolean)value);
++                else if (value instanceof Integer) safe.putInt(name, (Integer)value);
++                else if (value instanceof Long) safe.putLong(name, (Long)value);
++                else if (value instanceof Float) safe.putFloat(name, (Float)value);
++                else if (value instanceof Double) safe.putDouble(name, (Double)value);
++                else if (value instanceof String[]) safe.putStringArray(name, (String[])value);
++                else if (value instanceof byte[]) safe.putByteArray(name, (byte[])value);
++            }
++            game.putExtras(safe);
++        }
++        // Never copy an untrusted component, Parcelable, Binder, or Serializable.
++        startActivity(game); finish();
++    }
++    @Override public void onBackPressed() { finishAndRemoveTask(); }
++}
+diff --git a/scripts/apk/__pycache__/inventory.cpython-314.pyc b/scripts/apk/__pycache__/inventory.cpython-314.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c635f4e4787c29cac2d816562cd2f16ca502c14c
+GIT binary patch
+literal 1747
+zcmb7EO-vg{6rS<=XU!U7Q*dIy*oL%~3xyWk6bMRVMYyV{kh@VU1;ut3cEOt%+w86b
+zb`*)Ghu~C|iBt(6lT#C^QqxoEsiBETj<`i#cTSahsJNx#fRt0;*epg0QPr{h=6gT$
+zy`P=kzLw@D1gow4{+074g#Mz6u^b0rFU26Vg5rqBA0e&2V-44IlV+;zjK;)FQPw!x
+z*m+ZbM?+hJ9GXS54j|1IW1`N6$3OuTvxIP6JBt%IXUZ`N6gqHg_Lx1|Zp1cr!|y~B
+zIO2jFT#So)8h!&Aac>?NMChywO?Dv!@ki=3;-g*zHFn-%)Mv2Fe@I#W2LtmGL%ojA
+zUs;E*k>5bP`4uc*0t<@zjkv}hXw1<Cb9}wwF;I*%IFFhAYq7Qf;w>i;Zw<k7q|1pS
+zZ7}Wjm@E2r-EvgM+6^`znsg&%N8NCT=r08Q(&a-jTXe9Fk4oNl{4{wM?C%_ntYh8|
+z6%4;@H=g(4;lzD#Lnfi-V{5@t<G>LrxRJJ4D@ZHfWb_?3@!b1|J@B{}`B5J_ybmy)
+zE+m_L$O|3P-^bcn#*1Y9A5r0YRIquM=ARndr7yzN6tT^w1XY#Pf_XrcmS?HcShNWG
+z-|Gjlf-W0&6g?>K&;S4ifADJcqM&Kl3?><&^MDDSBW6Vs#0O}Po*<{xSw+rj>Y$Ll
+zIw+^FNog&k<Oi~O!j7keg&9#er_c`s{d}m+AXd<KuJ7Fs+z+{(;J8A~H9^d2VL>8h
+zRW3-xswRb@_s$T!6vV_Tr$t~5nhG}B9Hc6kQ}WDUu#?!5f|>+O%vaP*nlNf!CANZ`
+zos&~QB`EXP2m^HyCX>^k?939lr{!#fx^aQ9a(XV4l2wgh8Pcc;QC0{`57%mGQZ+%*
+z)FoL<5>`r!HKd$?iV02<b0#aL6&uyevL-3SGLy>8UM1FCRunYoLC8XYNbHm^QESVd
+zl$J$#UV?;XF}ILa>_+zrM|s%sg^ZX>N#~S4Q0Ws;eITDR7~{WDkB)k(ELUQS>{{#B
+zjxTI0%*uuG(3)7aIBq3wCe|+M7SE2wQ~spd+)|n@PM0pP;wtATjTA>pW4FidEK_By
+zIHq&{3g_Pr4C`FzS1z>S`nlt$4t;d0GCK7vua92Z8NIX}Pw4SvC7#sdi<S7|wz90p
+z^E>f;wWYn3zMcN9rF%78b+xX$@3_l&-Sds7Ed1dORC>lYF8=NfuT4C9_vy&y$g_#9
+z4=Ud9K7(32|8zJ@lf}uh`!4>r>0Z<QGY<nl_WjVek$klH^!n!Y$2Yc5eX2V?`==ST
+zbie^?$8#sbmRt6l_SMrxZS6vt`Rc~qu#Vo?w*lL_=fyq;LD2CFbqEHv$%OkOy_R1>
+k-5?*Id<*0g+#7LnPfmxeplmt0i2uY^CrfcJ7a6wy3x)GZh5!Hn
+
+literal 0
+HcmV?d00001
+
+diff --git a/scripts/apk/__pycache__/static_audit.cpython-314.pyc b/scripts/apk/__pycache__/static_audit.cpython-314.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..75d0a2b5cd46fffdea1915061ffd1082e2145030
+GIT binary patch
+literal 3370
+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
+Vzv`UBq~Y0V$FQFK_DBW1{||g*@y`GN
+
+literal 0
+HcmV?d00001
+
+diff --git a/scripts/apk/__pycache__/transform_manifest.cpython-314.pyc b/scripts/apk/__pycache__/transform_manifest.cpython-314.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..45d87b742892d3f39c82c03436ae83576594547d
+GIT binary patch
+literal 6057
+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
+XM$|h6sSw_6v<#JMKB~4188rU}gbOEM
+
+literal 0
+HcmV?d00001
+
+diff --git a/scripts/apk/build.sh b/scripts/apk/build.sh
+new file mode 100644
+index 0000000..f4b5d06
+--- /dev/null
++++ b/scripts/apk/build.sh
+@@ -0,0 +1,36 @@
++#!/usr/bin/env bash
++set -euo pipefail
++ROOT=$PWD; WORK=$ROOT/work; DIST=$ROOT/dist; LOG=$WORK/logs
++rm -rf "$WORK" "$DIST"; mkdir -p "$LOG" "$DIST"
++ORIG=$WORK/PLAY_GLOBAL_2.31.0_ORIGINAL.apk
++scripts/apk/download.sh "$ORIG"
++python3 scripts/apk/inventory.py "$ORIG" "$LOG/original-inventory.json"
++apksigner verify --verbose --print-certs "$ORIG" > "$LOG/original-signature.txt" || true
++aapt2 dump badging "$ORIG" > "$LOG/original-badging.txt"
++aapt2 dump xmltree "$ORIG" --file AndroidManifest.xml > "$LOG/original-manifest.txt"
++
++apktool d -f -s "$ORIG" -o "$WORK/decoded"
++GAME_ACTIVITY=$(python3 scripts/apk/transform_manifest.py "$WORK/decoded/AndroidManifest.xml" "$LOG/manifest-transform.json")
++apktool b "$WORK/decoded" -o "$WORK/base-unsigned.apk"
++
++# Compile an isolated gate and append it as a new highest-numbered DEX.
++ANDROID_JAR=$(find "${ANDROID_HOME:-/usr/lib/android-sdk}/platforms" -name android.jar | sort -V | tail -1)
++mkdir -p "$WORK/gate-src/com/mnhutx/playtogether/gate" "$WORK/gate-classes" "$WORK/gate-dex"
++sed "s|__GAME_ACTIVITY__|$GAME_ACTIVITY|g" scripts/apk/KeyGateActivity.java.in > "$WORK/gate-src/com/mnhutx/playtogether/gate/KeyGateActivity.java"
++javac -source 8 -target 8 -classpath "$ANDROID_JAR" -d "$WORK/gate-classes" "$WORK/gate-src/com/mnhutx/playtogether/gate/KeyGateActivity.java"
++D8=$(find "${ANDROID_HOME:-/usr/lib/android-sdk}/build-tools" -name d8 | sort -V | tail -1)
++(cd "$WORK/gate-classes" && jar cf "$WORK/gate.jar" .)
++"$D8" --lib "$ANDROID_JAR" --min-api 23 --output "$WORK/gate-dex" "$WORK/gate.jar"
++max=$(zipinfo -1 "$WORK/base-unsigned.apk" | sed -n 's/^classes\([0-9]*\)\.dex$/\1/p' | sed 's/^$/1/' | sort -n | tail -1)
++next=$((max+1)); cp "$WORK/gate-dex/classes.dex" "$WORK/classes${next}.dex"
++if zipinfo -1 "$ORIG" | grep -E '^classes[0-9]*\.dex$' | while read -r d; do unzip -p "$ORIG" "$d"; done | strings | grep -Fq 'com/mnhutx/playtogether/gate/KeyGateActivity'; then
++  echo 'Duplicate KeyGateActivity found in original DEX' >&2; exit 1
++fi
++(cd "$WORK" && zip -q -0 base-unsigned.apk "classes${next}.dex")
++
++zipalign -p -f 4 "$WORK/base-unsigned.apk" "$WORK/aligned.apk"
++keytool -genkeypair -noprompt -keystore "$WORK/mnhut-temporary.jks" -storepass changeit -keypass changeit -alias mnhut -keyalg RSA -keysize 4096 -validity 10000 -dname 'CN=Play Together MNHUT, O=MNHUT, C=VN'
++FINAL=$DIST/PLAY_GLOBAL_2.31.0_KEY_MNHUT.apk
++apksigner sign --ks "$WORK/mnhut-temporary.jks" --ks-pass pass:changeit --key-pass pass:changeit --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out "$FINAL" "$WORK/aligned.apk"
++scripts/apk/verify.sh "$ORIG" "$FINAL" "$GAME_ACTIVITY" "$next"
++scripts/apk/split-and-report.sh "$ORIG" "$FINAL" "$GAME_ACTIVITY" "$next"
+diff --git a/scripts/apk/download.sh b/scripts/apk/download.sh
+new file mode 100644
+index 0000000..cc2296e
+--- /dev/null
++++ b/scripts/apk/download.sh
+@@ -0,0 +1,28 @@
++#!/usr/bin/env bash
++set -euo pipefail
++out=$1
++id=${APK_FILE_ID:?APK_FILE_ID is required}
++url="https://drive.google.com/file/d/${id}/view?usp=drivesdk"
++
++gdown --fuzzy --continue "$url" -O "$out" || true
++if ! python3 - "$out" <<'PY'
++import os,sys
++p=sys.argv[1]
++sys.exit(0 if os.path.exists(p) and os.path.getsize(p) > 2_000_000_000 else 1)
++PY
++then
++  if test -f "$out" && test "$(head -c 2 "$out" 2>/dev/null || true)" != "PK"; then rm -f "$out"; fi
++  # drive.usercontent handles large-file confirmation; -C resumes a partial file.
++  curl -fL -C - --retry 20 --retry-all-errors --retry-delay 5 \
++    --connect-timeout 30 --speed-time 60 --speed-limit 1024 \
++    -o "$out" "https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t"
++fi
++
++size=$(stat -c %s "$out")
++test "$size" -ge 2100000000 -a "$size" -le 2250000000 || {
++  echo "Unexpected source size: $size" >&2; exit 1;
++}
++test "$(head -c 2 "$out")" = "PK"
++unzip -tq "$out"
++sha256sum "$out" | tee work/logs/original-apk.sha256
++stat -c '%n %s bytes' "$out" | tee work/logs/original-apk.size
+diff --git a/scripts/apk/install-tools.sh b/scripts/apk/install-tools.sh
+new file mode 100644
+index 0000000..523ac61
+--- /dev/null
++++ b/scripts/apk/install-tools.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++set -euo pipefail
++sudo apt-get update
++sudo apt-get install -y android-sdk-build-tools android-sdk-platform-tools unzip zip curl python3-pip jq
++python3 -m pip install --break-system-packages gdown
++
++mkdir -p tools
++APKTOOL_VERSION=2.11.1
++curl -fL --retry 10 --retry-all-errors -o tools/apktool.jar \
++  "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
++printf '#!/bin/sh\nexec java -Xmx6g -jar "%s/tools/apktool.jar" "$@"\n' "$PWD" > tools/apktool
++chmod +x tools/apktool scripts/apk/*.sh scripts/apk/*.py
++
++BUILD_TOOLS="$(find "${ANDROID_HOME:-/usr/lib/android-sdk}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
++test -x "$BUILD_TOOLS/apksigner"
++test -x "$BUILD_TOOLS/zipalign"
++echo "$BUILD_TOOLS" >> "$GITHUB_PATH"
++echo "$PWD/tools" >> "$GITHUB_PATH"
++
+diff --git a/scripts/apk/inventory.py b/scripts/apk/inventory.py
+new file mode 100644
+index 0000000..0409535
+--- /dev/null
++++ b/scripts/apk/inventory.py
+@@ -0,0 +1,12 @@
++#!/usr/bin/env python3
++import hashlib, json, sys, zipfile
++apk,out=sys.argv[1:]; rows=[]
++with zipfile.ZipFile(apk) as z:
++    for i in z.infolist():
++        if i.is_dir(): continue
++        if i.filename.startswith(("assets/","lib/")) or (i.filename.startswith("classes") and i.filename.endswith(".dex")):
++            h=hashlib.sha256()
++            with z.open(i) as f:
++                for block in iter(lambda:f.read(4*1024*1024),b""): h.update(block)
++            rows.append({"name":i.filename,"size":i.file_size,"sha256":h.hexdigest()})
++json.dump(rows,open(out,"w"),indent=2)
+diff --git a/scripts/apk/publish-release.sh b/scripts/apk/publish-release.sh
+new file mode 100644
+index 0000000..a499db3
+--- /dev/null
++++ b/scripts/apk/publish-release.sh
+@@ -0,0 +1,22 @@
++#!/usr/bin/env bash
++set -euo pipefail
++tag=${RELEASE_TAG:?}; title='Play Together MNHUT 2.31.0'
++if ! gh release view "$tag" >/dev/null 2>&1; then
++  gh release create "$tag" --title "$title" --notes-file dist/BUILD_REPORT.txt
++fi
++retry() { local n=0; until "$@"; do n=$((n+1)); test "$n" -lt 6 || return 1; sleep $((n*10)); done; }
++assets=(dist/PLAY_GLOBAL_2.31.0_KEY_MNHUT.apk.[0-9][0-9][0-9] dist/SHA256.txt dist/BUILD_REPORT.txt)
++for asset in "${assets[@]}"; do retry gh release upload "$tag" "$asset" --clobber; done
++
++# Require an exact remote name/size match for every local release asset.
++gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > work/logs/release.json
++python3 - "${assets[@]}" <<'PY'
++import json,os,sys
++r=json.load(open('work/logs/release.json')); remote={x['name']:x['size'] for x in r['assets']}
++for p in sys.argv[1:]:
++    name=os.path.basename(p); size=os.path.getsize(p)
++    assert remote.get(name)==size, f'release mismatch: {name} local={size} remote={remote.get(name)}'
++expected={os.path.basename(x) for x in sys.argv[1:]}
++assert expected <= set(remote), 'release is missing assets'
++print(r['html_url'])
++PY
+diff --git a/scripts/apk/split-and-report.sh b/scripts/apk/split-and-report.sh
+new file mode 100644
+index 0000000..1a21b04
+--- /dev/null
++++ b/scripts/apk/split-and-report.sh
+@@ -0,0 +1,63 @@
++#!/usr/bin/env bash
++set -euo pipefail
++orig=$1 apk=$2 game=$3 gate_dex=$4; base=${apk##*/}; dist=${apk%/*}
++apk_sha=$(sha256sum "$apk" | cut -d' ' -f1); apk_size=$(stat -c %s "$apk")
++orig_sha=$(sha256sum "$orig" | cut -d' ' -f1)
++split -b 95M -d -a 3 "$apk" "$dist/$base.tmp."
++i=1
++for p in "$dist/$base.tmp."*; do printf -v n '%03d' "$i"; mv "$p" "$dist/$base.$n"; i=$((i+1)); done
++count=$((i-1)); parts=("$dist/$base."[0-9][0-9][0-9])
++test "${#parts[@]}" -eq "$count"
++for p in "${parts[@]}"; do test "$(stat -c %s "$p")" -lt 100000000; done
++cat "${parts[@]}" > work/PLAY_GLOBAL_2.31.0_KEY_MNHUT-REJOINED.apk
++rejoined=work/PLAY_GLOBAL_2.31.0_KEY_MNHUT-REJOINED.apk
++re_sha=$(sha256sum "$rejoined" | cut -d' ' -f1); test "$re_sha" = "$apk_sha"
++unzip -tq "$rejoined" > work/logs/rejoined-unzip.txt
++zipalign -c -v 4 "$rejoined" > work/logs/rejoined-zipalign.txt
++apksigner verify --verbose --print-certs "$rejoined" > work/logs/rejoined-signature.txt
++grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' work/logs/rejoined-signature.txt
++grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' work/logs/rejoined-signature.txt
++
++{
++  echo "APK: $base"; echo "APK size: $apk_size bytes"; echo "APK SHA-256: $apk_sha"
++  echo "Part count: $count"
++  for p in "${parts[@]}"; do echo "$(basename "$p") | $(stat -c %s "$p") bytes | $(sha256sum "$p" | cut -d' ' -f1)"; done
++  echo "Rejoined SHA-256: $re_sha"; echo "ZIP: PASS"; echo "zipalign: PASS"
++  echo "apksigner: PASS (v2=true, v3=true)"; echo "Package ID: com.mnhutx.playtogether"
++  echo "MT Manager: đặt mọi part cùng thư mục, chọn theo thứ tự .001 đến part cuối và ghép nhị phân; đổi tên kết quả thành $base."
++} > "$dist/SHA256.txt"
++
++python3 - "$orig_sha" "$apk_sha" "$apk_size" "$count" "$game" "$gate_dex" <<'PY' > "$dist/BUILD_REPORT.txt"
++import json,sys
++orig,new,size,count,game,dex=sys.argv[1:]
++m=json.load(open('work/logs/manifest-transform.json'))
++o=json.load(open('work/logs/original-inventory.json')); n=json.load(open('work/logs/final-inventory.json'))
++abis=sorted({x['name'].split('/')[1] for x in o if x['name'].startswith('lib/')})
++dexes=[x['name'] for x in o if x['name'].startswith('classes')]
++print(f'''Play Together MNHUT build report
++Original SHA-256: {orig}
++New APK SHA-256: {new}
++New APK size: {size} bytes
++Old package: com.haegin.playtogether
++New package: com.mnhutx.playtogether
++Display name: Play Together MNHUT
++New launcher: com.mnhutx.playtogether.gate.KeyGateActivity
++Original game Activity: {game}
++Original game Activity exported: false
++Moved launcher/deep-link filters: {m['moved_intent_filters']}
++Self-identifier changes: {json.dumps(m['identifier_changes'],ensure_ascii=False)}
++Original DEX retained byte-for-byte: {', '.join(dexes)}
++Added DEX: classes{dex}.dex (KeyGateActivity)
++Native ABIs: {', '.join(abis)}
++.so/assets comparison: PASS (all original content hashes retained)
++unzip -t: PASS
++zipalign -c -v 4: PASS
++apksigner: PASS; v2=true; v3=true
++aapt2: PASS (package, label, launcher and manifest inspected)
++Gate static audit: PASS; exact Java String.equals("mnhut"), no trim/case-fold, all launcher/BROWSABLE filters moved, other UI non-exported
++Part rejoin: PASS; SHA-256 identical; ZIP/alignment/signature reverified
++Part count: {count}; maximum part size: 95 MiB
++Runtime limitation: GitHub hosted runner has no compatible game emulator/GPU/server environment; runtime gate and installation tests were not performed.
++''')
++PY
++rm -f "$apk" # Release contains only parts and reports; never upload the 2+ GB whole APK.
+diff --git a/scripts/apk/static_audit.py b/scripts/apk/static_audit.py
+new file mode 100644
+index 0000000..e65a7c2
+--- /dev/null
++++ b/scripts/apk/static_audit.py
+@@ -0,0 +1,25 @@
++#!/usr/bin/env python3
++import json,sys,xml.etree.ElementTree as E
++A='{http://schemas.android.com/apk/res/android}'
++game,gate_dex=sys.argv[1:]; gate='com.mnhutx.playtogether.gate.KeyGateActivity'
++old={x['name']:x for x in json.load(open('work/logs/original-inventory.json'))}
++new={x['name']:x for x in json.load(open('work/logs/final-inventory.json'))}
++for name,row in old.items():
++    assert name in new, 'missing '+name
++    assert row['sha256']==new[name]['sha256'], 'modified original payload '+name
++assert 'classes'+gate_dex+'.dex' in new, 'gate DEX missing'
++r=E.parse('work/decoded/AndroidManifest.xml').getroot(); app=r.find('application')
++for tag in ('activity','activity-alias'):
++    for n in app.findall(tag):
++        name=n.get(A+'name')
++        for f in n.findall('intent-filter'):
++            cats={x.get(A+'name') for x in f.findall('category')}
++            if {'android.intent.category.LAUNCHER','android.intent.category.BROWSABLE'} & cats:
++                assert name==gate, 'external entry bypasses gate: '+str(name)
++        if name!=gate: assert n.get(A+'exported')=='false', 'exported UI: '+str(name)
++games=[n for n in app.findall('activity') if n.get(A+'name')==game]
++assert games and games[0].get(A+'exported')=='false'
++for n in r.findall('permission')+r.findall('permission-group')+r.findall('permission-tree'):
++    assert not n.get(A+'name','').startswith('com.haegin.playtogether')
++for n in app.findall('provider'):
++    assert 'com.haegin.playtogether' not in n.get(A+'authorities','')
+diff --git a/scripts/apk/transform_manifest.py b/scripts/apk/transform_manifest.py
+new file mode 100644
+index 0000000..4b74eb7
+--- /dev/null
++++ b/scripts/apk/transform_manifest.py
+@@ -0,0 +1,73 @@
++#!/usr/bin/env python3
++import copy, json, sys
++from pathlib import Path
++import xml.etree.ElementTree as ET
++
++A = "{http://schemas.android.com/apk/res/android}"
++OLD, NEW = "com.haegin.playtogether", "com.mnhutx.playtogether"
++path, report = Path(sys.argv[1]), Path(sys.argv[2])
++ET.register_namespace("android", A[1:-1])
++tree = ET.parse(path); root = tree.getroot(); oldpkg = root.get("package")
++if oldpkg != OLD: raise SystemExit(f"Unexpected package {oldpkg}")
++app = root.find("application")
++
++def absolute(name):
++    if not name: return name
++    if name.startswith("."): return OLD + name
++    if "." not in name: return OLD + "." + name
++    return name
++
++components = ["activity", "activity-alias", "service", "receiver", "provider"]
++for tag in components:
++    for node in app.findall(tag):
++        node.set(A+"name", absolute(node.get(A+"name")))
++        if tag == "activity-alias" and node.get(A+"targetActivity"):
++            node.set(A+"targetActivity", absolute(node.get(A+"targetActivity")))
++if app.get(A+"name"): app.set(A+"name", absolute(app.get(A+"name")))
++
++launcher = None; moved=[]
++for tag in ("activity", "activity-alias"):
++    for node in list(app.findall(tag)):
++        for filt in list(node.findall("intent-filter")):
++            actions={x.get(A+"name") for x in filt.findall("action")}
++            cats={x.get(A+"name") for x in filt.findall("category")}
++            entry = ("android.intent.action.MAIN" in actions and
++                     "android.intent.category.LAUNCHER" in cats)
++            browser = "android.intent.category.BROWSABLE" in cats
++            if entry and launcher is None:
++                launcher = node.get(A+"targetActivity") or node.get(A+"name")
++            if entry or browser:
++                moved.append(copy.deepcopy(filt)); node.remove(filt)
++        # No UI activity can remain externally callable around the gate.
++        node.set(A+"exported", "false")
++if not launcher: raise SystemExit("No original MAIN/LAUNCHER activity found")
++
++gate = ET.Element("activity", {A+"name": NEW+".gate.KeyGateActivity",
++    A+"exported":"true", A+"launchMode":"singleTask", A+"excludeFromRecents":"false"})
++seen=set()
++for filt in moved:
++    key=ET.tostring(filt)
++    if key not in seen: gate.append(filt); seen.add(key)
++app.insert(0, gate)
++
++# Change only package-manager/runtime self-identifiers, never Java class names.
++root.set("package", NEW); app.set(A+"label", "Play Together MNHUT")
++changed=[]
++self_attrs={"authorities","permission","readPermission","writePermission",
++            "permissionGroup","taskAffinity","process","scheme","accountType"}
++for node in root.iter():
++    for key,val in list(node.attrib.items()):
++        local=key.rsplit("}",1)[-1]
++        if local in self_attrs and OLD in val:
++            node.set(key,val.replace(OLD,NEW)); changed.append([node.tag,local,val,node.get(key)])
++for tag in ("permission","permission-group","permission-tree"):
++    for node in root.findall(tag):
++        val=node.get(A+"name","")
++        if OLD in val:
++            node.set(A+"name",val.replace(OLD,NEW)); changed.append([tag,"name",val,node.get(A+"name")])
++
++tree.write(path, encoding="utf-8", xml_declaration=True)
++report.write_text(json.dumps({"old_package":OLD,"new_package":NEW,
++  "original_game_activity":launcher,"gate_activity":NEW+".gate.KeyGateActivity",
++  "moved_intent_filters":len(moved),"identifier_changes":changed},indent=2))
++print(launcher)
+diff --git a/scripts/apk/verify.sh b/scripts/apk/verify.sh
+new file mode 100644
+index 0000000..9efc326
+--- /dev/null
++++ b/scripts/apk/verify.sh
+@@ -0,0 +1,16 @@
++#!/usr/bin/env bash
++set -euo pipefail
++orig=$1 apk=$2 game=$3 gate_dex=$4
++unzip -tq "$apk" | tee work/logs/final-unzip.txt
++zipalign -c -v 4 "$apk" > work/logs/final-zipalign.txt
++apksigner verify --verbose --print-certs "$apk" | tee work/logs/final-signature.txt
++grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' work/logs/final-signature.txt
++grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' work/logs/final-signature.txt
++aapt2 dump badging "$apk" > work/logs/final-badging.txt
++aapt2 dump xmltree "$apk" --file AndroidManifest.xml > work/logs/final-manifest.txt
++grep -q "package: name='com.mnhutx.playtogether'" work/logs/final-badging.txt
++grep -q "application-label:'Play Together MNHUT'" work/logs/final-badging.txt
++grep -q 'com.mnhutx.playtogether.gate.KeyGateActivity' work/logs/final-badging.txt
++grep -q "$game" work/logs/final-manifest.txt
++python3 scripts/apk/inventory.py "$apk" work/logs/final-inventory.json
++python3 scripts/apk/static_audit.py "$game" "$gate_dex"
+-- 
+2.43.0
+
+
+From 647947065ceed3237f640040c12fef0f6ffe9805 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Mon, 14 Sep 2026 16:17:37 +0000
+Subject: [PATCH 2/2] Exclude generated Python bytecode
+
+---
+ .gitignore                                       |   2 ++
+ .../apk/__pycache__/inventory.cpython-314.pyc    | Bin 1747 -> 0 bytes
+ .../apk/__pycache__/static_audit.cpython-314.pyc | Bin 3370 -> 0 bytes
+ .../transform_manifest.cpython-314.pyc           | Bin 6057 -> 0 bytes
+ 4 files changed, 2 insertions(+)
+ delete mode 100644 scripts/apk/__pycache__/inventory.cpython-314.pyc
+ delete mode 100644 scripts/apk/__pycache__/static_audit.cpython-314.pyc
+ delete mode 100644 scripts/apk/__pycache__/transform_manifest.cpython-314.pyc
+
+diff --git a/.gitignore b/.gitignore
+index 692df33..1aa86e7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,3 +6,5 @@
+ work/
+ dist/
+ tools/
++__pycache__/
++*.pyc
+diff --git a/scripts/apk/__pycache__/inventory.cpython-314.pyc b/scripts/apk/__pycache__/inventory.cpython-314.pyc
+deleted file mode 100644
+index c635f4e4787c29cac2d816562cd2f16ca502c14c..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 1747
+zcmb7EO-vg{6rS<=XU!U7Q*dIy*oL%~3xyWk6bMRVMYyV{kh@VU1;ut3cEOt%+w86b
+zb`*)Ghu~C|iBt(6lT#C^QqxoEsiBETj<`i#cTSahsJNx#fRt0;*epg0QPr{h=6gT$
+zy`P=kzLw@D1gow4{+074g#Mz6u^b0rFU26Vg5rqBA0e&2V-44IlV+;zjK;)FQPw!x
+z*m+ZbM?+hJ9GXS54j|1IW1`N6$3OuTvxIP6JBt%IXUZ`N6gqHg_Lx1|Zp1cr!|y~B
+zIO2jFT#So)8h!&Aac>?NMChywO?Dv!@ki=3;-g*zHFn-%)Mv2Fe@I#W2LtmGL%ojA
+zUs;E*k>5bP`4uc*0t<@zjkv}hXw1<Cb9}wwF;I*%IFFhAYq7Qf;w>i;Zw<k7q|1pS
+zZ7}Wjm@E2r-EvgM+6^`znsg&%N8NCT=r08Q(&a-jTXe9Fk4oNl{4{wM?C%_ntYh8|
+z6%4;@H=g(4;lzD#Lnfi-V{5@t<G>LrxRJJ4D@ZHfWb_?3@!b1|J@B{}`B5J_ybmy)
+zE+m_L$O|3P-^bcn#*1Y9A5r0YRIquM=ARndr7yzN6tT^w1XY#Pf_XrcmS?HcShNWG
+z-|Gjlf-W0&6g?>K&;S4ifADJcqM&Kl3?><&^MDDSBW6Vs#0O}Po*<{xSw+rj>Y$Ll
+zIw+^FNog&k<Oi~O!j7keg&9#er_c`s{d}m+AXd<KuJ7Fs+z+{(;J8A~H9^d2VL>8h
+zRW3-xswRb@_s$T!6vV_Tr$t~5nhG}B9Hc6kQ}WDUu#?!5f|>+O%vaP*nlNf!CANZ`
+zos&~QB`EXP2m^HyCX>^k?939lr{!#fx^aQ9a(XV4l2wgh8Pcc;QC0{`57%mGQZ+%*
+z)FoL<5>`r!HKd$?iV02<b0#aL6&uyevL-3SGLy>8UM1FCRunYoLC8XYNbHm^QESVd
+zl$J$#UV?;XF}ILa>_+zrM|s%sg^ZX>N#~S4Q0Ws;eITDR7~{WDkB)k(ELUQS>{{#B
+zjxTI0%*uuG(3)7aIBq3wCe|+M7SE2wQ~spd+)|n@PM0pP;wtATjTA>pW4FidEK_By
+zIHq&{3g_Pr4C`FzS1z>S`nlt$4t;d0GCK7vua92Z8NIX}Pw4SvC7#sdi<S7|wz90p
+z^E>f;wWYn3zMcN9rF%78b+xX$@3_l&-Sds7Ed1dORC>lYF8=NfuT4C9_vy&y$g_#9
+z4=Ud9K7(32|8zJ@lf}uh`!4>r>0Z<QGY<nl_WjVek$klH^!n!Y$2Yc5eX2V?`==ST
+zbie^?$8#sbmRt6l_SMrxZS6vt`Rc~qu#Vo?w*lL_=fyq;LD2CFbqEHv$%OkOy_R1>
+k-5?*Id<*0g+#7LnPfmxeplmt0i2uY^CrfcJ7a6wy3x)GZh5!Hn
+
+diff --git a/scripts/apk/__pycache__/static_audit.cpython-314.pyc b/scripts/apk/__pycache__/static_audit.cpython-314.pyc
+deleted file mode 100644
+index 75d0a2b5cd46fffdea1915061ffd1082e2145030..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 3370
+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
+Vzv`UBq~Y0V$FQFK_DBW1{||g*@y`GN
+
+diff --git a/scripts/apk/__pycache__/transform_manifest.cpython-314.pyc b/scripts/apk/__pycache__/transform_manifest.cpython-314.pyc
+deleted file mode 100644
+index 45d87b742892d3f39c82c03436ae83576594547d..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 6057
+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
+XM$|h6sSw_6v<#JMKB~4188rU}gbOEM
+
+-- 
+2.43.0
+
