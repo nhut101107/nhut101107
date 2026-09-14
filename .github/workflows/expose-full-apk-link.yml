@@ -13,7 +13,7 @@ jobs:
   expose-link:
     runs-on: ubuntu-latest
     steps:
-      - name: Put the verified direct APK link in release notes
+      - name: Put the latest verified direct APK link in release notes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
