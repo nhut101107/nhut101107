@@ -1,4 +1,5 @@
 name: Expose complete APK link
+# Sync the newest successful build upload into the release notes.
 
 on:
   workflow_dispatch:
