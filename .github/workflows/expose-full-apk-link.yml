@@ -1,0 +1,31 @@
+name: Expose complete APK link
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/expose-full-apk-link.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  expose-link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Put the direct APK link in release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: play-together-mnhut-2.31.0
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/apk-link
+          gh release download "$TAG" --repo "$GH_REPO" --pattern FULL_APK_DOWNLOAD.txt --dir /tmp/apk-link --clobber
+          gh release view "$TAG" --repo "$GH_REPO" --json body --jq .body > /tmp/release-notes.txt
+          {
+            echo
+            echo "## Complete APK — no merging required"
+            cat /tmp/apk-link/FULL_APK_DOWNLOAD.txt
+          } >> /tmp/release-notes.txt
+          gh release edit "$TAG" --repo "$GH_REPO" --notes-file /tmp/release-notes.txt
