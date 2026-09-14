@@ -60,4 +60,4 @@ Part count: {count}; maximum part size: 95 MiB
 Runtime limitation: GitHub hosted runner has no compatible game emulator/GPU/server environment; runtime gate and installation tests were not performed.
 ''')
 PY
-rm -f "$apk" # Release contains only parts and reports; never upload the 2+ GB whole APK.
+# Keep the verified complete APK until the publishing step uploads it.
