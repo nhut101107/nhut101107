@@ -73,6 +73,8 @@ gate = ET.Element("activity", {
     A + "exported": "true",
     A + "launchMode": "singleTask",
     A + "excludeFromRecents": "false",
+    A + "process": ":mnhut_keygate",
+    A + "theme": "@android:style/Theme.Material.Light.NoActionBar",
 })
 seen = set()
 for filt in moved:
