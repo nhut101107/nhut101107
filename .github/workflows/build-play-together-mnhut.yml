@@ -31,6 +31,8 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/share/dotnet /opt/ghc || true
           df -h .
+      - name: Make scripts executable
+        run: chmod +x scripts/apk/*.sh
       - name: Install tools
         run: scripts/apk/install-tools.sh
       - name: Download and build
@@ -48,4 +50,3 @@ jobs:
             work/logs/**
             dist/*.txt
           if-no-files-found: ignore
-
