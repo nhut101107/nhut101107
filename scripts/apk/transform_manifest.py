@@ -49,6 +49,7 @@ for tag in components:
 if app.get(A + "name"):
     app.set(A + "name", absolute(app.get(A + "name")))
 original_application = app.get(A + "name") or "android.app.Application"
+original_app_component_factory = absolute(app.get(A + "appComponentFactory")) or ""
 
 launcher = None
 moved = []
@@ -87,7 +88,7 @@ app.insert(0, gate)
 
 root.set("package", NEW)
 app.set(A + "label", "Play Together MNHUT")
-app.set(A + "name", NEW + ".gate.GateApplication")
+app.set(A + "appComponentFactory", NEW + ".gate.GateAppComponentFactory")
 changed = []
 
 # A cloned package cannot retain sharedUserId because Android ties that UID to
@@ -148,7 +149,8 @@ report.write_text(json.dumps({
     "new_package": NEW,
     "original_game_activity": launcher,
     "original_application": original_application,
-    "gate_application": NEW + ".gate.GateApplication",
+    "original_app_component_factory": original_app_component_factory,
+    "gate_app_component_factory": NEW + ".gate.GateAppComponentFactory",
     "gate_activity": NEW + ".gate.KeyGateActivity",
     "moved_intent_filters": len(moved),
     "declared_permission_map": declared,

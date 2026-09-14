@@ -11,13 +11,15 @@ aapt2 dump xmltree "$ORIG" --file AndroidManifest.xml > "$LOG/original-manifest.
 
 apktool d -f -s "$ORIG" -o "$WORK/decoded"
 GAME_ACTIVITY=$(python3 scripts/apk/transform_manifest.py "$WORK/decoded/AndroidManifest.xml" "$LOG/manifest-transform.json")
+ORIGINAL_FACTORY=$(python3 -c 'import json; print(json.load(open("work/logs/manifest-transform.json"))["original_app_component_factory"])')
 apktool b "$WORK/decoded" -o "$WORK/base-unsigned.apk"
 
 # Compile an isolated gate and append it as a new highest-numbered DEX.
 ANDROID_JAR=$(find "${ANDROID_HOME:-/usr/lib/android-sdk}/platforms" -name android.jar | sort -V | tail -1)
 mkdir -p "$WORK/gate-src/com/mnhutx/playtogether/gate" "$WORK/gate-classes" "$WORK/gate-dex"
 sed "s|__GAME_ACTIVITY__|$GAME_ACTIVITY|g" scripts/apk/KeyGateActivity.java.in > "$WORK/gate-src/com/mnhutx/playtogether/gate/KeyGateActivity.java"
-javac -source 8 -target 8 -classpath "$ANDROID_JAR" -d "$WORK/gate-classes" "$WORK/gate-src/com/mnhutx/playtogether/gate/KeyGateActivity.java"
+sed "s|__ORIGINAL_FACTORY__|$ORIGINAL_FACTORY|g" scripts/apk/GateAppComponentFactory.java.in > "$WORK/gate-src/com/mnhutx/playtogether/gate/GateAppComponentFactory.java"
+javac -source 8 -target 8 -classpath "$ANDROID_JAR" -d "$WORK/gate-classes"   "$WORK/gate-src/com/mnhutx/playtogether/gate/KeyGateActivity.java"   "$WORK/gate-src/com/mnhutx/playtogether/gate/GateAppComponentFactory.java"
 D8=$(find "${ANDROID_HOME:-/usr/lib/android-sdk}/build-tools" -name d8 | sort -V | tail -1)
 (cd "$WORK/gate-classes" && jar cf "$WORK/gate.jar" .)
 "$D8" --lib "$ANDROID_JAR" --min-api 23 --output "$WORK/gate-dex" "$WORK/gate.jar"

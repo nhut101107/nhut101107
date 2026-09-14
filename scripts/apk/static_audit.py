@@ -9,6 +9,11 @@ for name,row in old.items():
     assert row['sha256']==new[name]['sha256'], 'modified original payload '+name
 assert 'classes'+gate_dex+'.dex' in new, 'gate DEX missing'
 r=E.parse('work/decoded/AndroidManifest.xml').getroot(); app=r.find('application')
+assert app.get(A+'appComponentFactory')=='com.mnhutx.playtogether.gate.GateAppComponentFactory'
+gate_nodes=[n for n in app.findall('activity') if n.get(A+'name')==gate]
+assert len(gate_nodes)==1
+assert gate_nodes[0].get(A+'process')==':mnhut_keygate'
+assert gate_nodes[0].get(A+'theme')=='@android:style/Theme.Material.Light.NoActionBar'
 for tag in ('activity','activity-alias'):
     for n in app.findall(tag):
         name=n.get(A+'name')
