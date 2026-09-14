@@ -1,0 +1,47 @@
+name: Expose complete APK link
+# Sync the newest AppComponentFactory build upload into the release notes.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/expose-full-apk-link.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  expose-link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Put the latest verified direct APK link in release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: play-together-mnhut-2.31.0
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/apk-link
+          gh release download "$TAG" --repo "$GH_REPO"             --pattern FULL_APK_DOWNLOAD.txt             --pattern SHA256.txt             --pattern BUILD_REPORT.txt             --dir /tmp/apk-link --clobber
+          page=$(grep -m1 '^https://' /tmp/apk-link/FULL_APK_DOWNLOAD.txt)
+          sha=$(awk '/^APK SHA-256:/ {print $3; exit}' /tmp/apk-link/SHA256.txt)
+          test -n "$page"
+          test -n "$sha"
+          cat > /tmp/apk-link/FULL_APK_DOWNLOAD.txt <<EOF
+          Complete APK download (no merging required):
+          $page
+
+          Filename: PLAY_GLOBAL_2.31.0_KEY_MNHUT.apk
+          SHA-256: $sha
+          EOF
+          gh release upload "$TAG" --repo "$GH_REPO" /tmp/apk-link/FULL_APK_DOWNLOAD.txt --clobber
+          {
+            cat /tmp/apk-link/BUILD_REPORT.txt
+            echo
+            echo "## Complete APK — no merging required"
+            echo "$page"
+            echo
+            echo "Filename: PLAY_GLOBAL_2.31.0_KEY_MNHUT.apk"
+            echo "SHA-256: $sha"
+          } > /tmp/release-notes.txt
+          gh release edit "$TAG" --repo "$GH_REPO" --notes-file /tmp/release-notes.txt

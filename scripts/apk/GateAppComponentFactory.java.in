@@ -1,0 +1,87 @@
+package com.mnhutx.playtogether.gate;
+
+import android.app.Activity;
+import android.app.AppComponentFactory;
+import android.app.Application;
+import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.ContentProvider;
+import android.content.Intent;
+
+public final class GateAppComponentFactory extends AppComponentFactory {
+    private static final String ORIGINAL_FACTORY = "__ORIGINAL_FACTORY__";
+    private static final String GATE_PROCESS_SUFFIX = ":mnhut_keygate";
+
+    private static boolean isGateProcess() {
+        try {
+            java.io.FileInputStream in = new java.io.FileInputStream("/proc/self/cmdline");
+            byte[] bytes = new byte[256];
+            int count = in.read(bytes);
+            in.close();
+            if (count <= 0) return false;
+            int end = 0;
+            while (end < count && bytes[end] != 0) end++;
+            String process = new String(bytes, 0, end, "UTF-8");
+            return process.endsWith(GATE_PROCESS_SUFFIX);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static AppComponentFactory originalFactory(ClassLoader cl) {
+        if (ORIGINAL_FACTORY.length() == 0 ||
+                ORIGINAL_FACTORY.equals(GateAppComponentFactory.class.getName())) return null;
+        try {
+            return (AppComponentFactory) cl.loadClass(ORIGINAL_FACTORY).newInstance();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    @Override
+    public Application instantiateApplication(ClassLoader cl, String className)
+            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+        if (isGateProcess()) return new Application();
+        AppComponentFactory delegate = originalFactory(cl);
+        return delegate != null
+                ? delegate.instantiateApplication(cl, className)
+                : super.instantiateApplication(cl, className);
+    }
+
+    @Override
+    public Activity instantiateActivity(ClassLoader cl, String className, Intent intent)
+            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+        if (isGateProcess()) return super.instantiateActivity(cl, className, intent);
+        AppComponentFactory delegate = originalFactory(cl);
+        return delegate != null
+                ? delegate.instantiateActivity(cl, className, intent)
+                : super.instantiateActivity(cl, className, intent);
+    }
+
+    @Override
+    public Service instantiateService(ClassLoader cl, String className, Intent intent)
+            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+        AppComponentFactory delegate = originalFactory(cl);
+        return delegate != null
+                ? delegate.instantiateService(cl, className, intent)
+                : super.instantiateService(cl, className, intent);
+    }
+
+    @Override
+    public BroadcastReceiver instantiateReceiver(ClassLoader cl, String className, Intent intent)
+            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+        AppComponentFactory delegate = originalFactory(cl);
+        return delegate != null
+                ? delegate.instantiateReceiver(cl, className, intent)
+                : super.instantiateReceiver(cl, className, intent);
+    }
+
+    @Override
+    public ContentProvider instantiateProvider(ClassLoader cl, String className)
+            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
+        AppComponentFactory delegate = originalFactory(cl);
+        return delegate != null
+                ? delegate.instantiateProvider(cl, className)
+                : super.instantiateProvider(cl, className);
+    }
+}

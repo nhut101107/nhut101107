@@ -1,0 +1,10 @@
+# Large Android build inputs and outputs must never enter Git history.
+*.apk
+*.apk.[0-9][0-9][0-9]
+*.jks
+*.keystore
+work/
+dist/
+tools/
+__pycache__/
+*.pyc
